@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use bevy::{math::{Vec2, Vec3}, prelude::{Color, Transform}};
 use lyon_svg::parser::ViewBox;
 use lyon_tessellation::math::Point;
-use usvg::NodeExt;
+use usvg::{IsDefault, NodeExt};
 
-use crate::bundle::SvgBundle;
+use crate::{bundle::SvgBundle, utils::{ColorExt, TransformExt}};
 
 /// A loaded and deserialized SVG file.
 #[derive(Debug)]
@@ -81,12 +81,18 @@ impl SvgBuilder {
     pub fn build<'s>(self) -> Result<SvgBundle, Box<dyn std::error::Error>> {
         let mut opt = usvg::Options::default();
         opt.fontdb.load_system_fonts();
+        //opt.keep_named_groups = true;
 
         let svg_data = std::fs::read(&self.file)?;
         let svg_tree = usvg::Tree::from_data(&svg_data, &opt)?;
 
         let view_box = svg_tree.svg_node().view_box;
         let size = svg_tree.svg_node().size;
+
+        println!("view_box: {:?}", view_box);
+        println!("size: {:?}", size.to_screen_size());
+        let mut transform = usvg::utils::view_box_to_transform(view_box.rect, view_box.aspect, size.to_screen_size().to_size());
+        println!("svg::utils::view_box_to_transform: {:#?}", transform);
 
         let translation = match self.origin {
             Origin::Center => self.translation + Vec3::new(
@@ -100,41 +106,7 @@ impl SvgBuilder {
         let mut descriptors = Vec::new();
 
         for node in svg_tree.root().descendants() {
-            if let usvg::NodeKind::Path(ref p) = *node.borrow() {
-                let t = node.abs_transform();
-                let mat = bevy::math::Mat4::from_cols(
-                    [t.a as f32, t.b as f32, 0.0, 0.0].into(),
-                    [t.c as f32, t.d as f32, 0.0, 0.0].into(),
-                    [t.e as f32, t.f as f32, 1.0, 0.0].into(),
-                    [0.0, 0.0, 0.0, 1.0].into()
-                );
-
-                if let Some(ref fill) = p.fill {
-                    let color = match fill.paint {
-                        usvg::Paint::Color(c) =>
-                            Color::rgba_u8(c.red, c.green, c.blue, fill.opacity.to_u8()),
-                        _ => Color::default(),
-                    };
-
-                    descriptors.push(PathDescriptor {
-                        segments: convert_path(p).collect(),
-                        abs_transform: Transform::from_matrix(mat),
-                        color,
-                        draw_type: DrawType::Fill,
-                    });
-                }
-
-                if let Some(ref stroke) = p.stroke {
-                    let (color, stroke_opts) = convert_stroke(stroke);
-
-                    descriptors.push(PathDescriptor {
-                        segments: convert_path(p).collect(),
-                        abs_transform: Transform::from_matrix(mat),
-                        color,
-                        draw_type: DrawType::Stroke(stroke_opts),
-                    });
-                }
-            }
+            render_node(&node, &mut transform, &mut descriptors);
         }
 
         let svg = Svg {
@@ -153,6 +125,176 @@ impl SvgBuilder {
 
         Ok(SvgBundle::new(svg).at_position(translation).with_scale(self.scale))
     }
+}
+
+fn render_node(node: &usvg::Node, transform: &mut usvg::Transform, descriptors: &mut Vec<PathDescriptor>) {
+    match *node.borrow() {
+        usvg::NodeKind::Path(ref p) => {
+            println!("NodeKind::Path");
+            let mut t = node.abs_transform();
+            t.append(&node.transform());
+            let t = t.to_bevy();
+
+            if let Some(ref fill) = p.fill {
+                let color = fill.paint.to_bevy_with_alpha_u8(fill.opacity.to_u8());
+
+                descriptors.push(PathDescriptor {
+                    segments: convert_path(p).collect(),
+                    abs_transform: t,
+                    color,
+                    draw_type: DrawType::Fill,
+                });
+            }
+
+            if let Some(ref stroke) = p.stroke {
+                let (color, stroke_opts) = convert_stroke(stroke);
+
+                descriptors.push(PathDescriptor {
+                    segments: convert_path(p).collect(),
+                    abs_transform: t,
+                    color,
+                    draw_type: DrawType::Stroke(stroke_opts),
+                });
+            }
+        }
+        usvg::NodeKind::Svg(_) => {
+            println!("NodeKind::Svg");
+            render_group(node, transform, descriptors)
+        }
+        usvg::NodeKind::Group(ref g) => {
+            println!("NodeKind::Group(id: {}) Start", g.id);
+            render_group_impl(node, g, transform, descriptors);
+            println!("NodeKind::Group(id: {}) End", g.id);
+        }
+        usvg::NodeKind::Defs => {
+            println!("NodeKind::Defs: {:?}", &node);
+        }
+        _ => {
+            println!("_ => : {:#?}", node);
+        }
+    }
+}
+
+fn concat(a: &mut usvg::Transform, b: usvg::Transform) {
+    if a.is_identity() {
+        a.a = b.a;
+        a.b = b.b;
+        a.c = b.c;
+        a.d = b.d;
+        a.e = b.e;
+        a.f = b.f;
+    } else if b.is_identity() {
+        {}
+    } else if !a.has_skew() && !b.has_skew() {
+        // just scale and translate
+        a.a = a.a * b.a;
+        a.b = 0.0;
+        a.c = 0.0;
+        a.d = a.d * b.d;
+        a.e = a.a * b.e + a.e;
+        a.f = a.d * b.f + a.f;
+    } else {
+        a.append(&b);
+    }
+}
+
+pub(crate) fn render_group(parent: &usvg::Node, transform: &mut usvg::Transform, descriptors: &mut Vec<PathDescriptor>) {
+    let mut g_bbox = usvg::Rect::new_bbox();
+
+    for node in parent.children() {
+        concat(transform, node.transform());
+        render_node(&node, transform, descriptors);
+    }
+}
+
+fn render_group_impl(node: &usvg::Node, g: &usvg::Group, transform: &mut usvg::Transform, descriptors: &mut Vec<PathDescriptor>) {
+    let bbox = {
+        render_group(node, transform, descriptors)
+    };
+
+    // // At this point, `sub_pixmap` has probably the same size as the viewbox.
+    // // So instead of clipping, masking and blending the whole viewbox, which can be very expensive,
+    // // we're trying to reduce `sub_pixmap` to it's actual content trimming
+    // // all transparent borders.
+    // //
+    // // Basically, if viewbox is 2000x2000 and the current group is 20x20, there is no point
+    // // in blending the whole viewbox, we can blend just the current group region.
+    // //
+    // // Transparency trimming is not yet allowed on groups with filter,
+    // // because filter expands the pixmap and it should be handled separately.
+    // let (tx, ty, mut sub_pixmap) = if g.filter.is_none() {
+    //     trim_transparency(sub_pixmap)?
+    // } else {
+    //     (0, 0, sub_pixmap)
+    // };
+
+    // // During the background rendering for filters,
+    // // an opacity, a filter, a clip and a mask should be ignored for the inner group.
+    // // So we are simply rendering the `sub_img` without any postprocessing.
+    // //
+    // // SVG spec, 15.6 Accessing the background image
+    // // 'Any filter effects, masking and group opacity that might be set on A[i] do not apply
+    // // when rendering the children of A[i] into BUF[i].'
+    // if *state == RenderState::BackgroundFinished {
+    //     let paint = tiny_skia::PixmapPaint::default();
+    //     canvas.pixmap.draw_pixmap(tx, ty, sub_pixmap.as_ref(), &paint,
+    //                               tiny_skia::Transform::identity(), None);
+    //     return bbox;
+    // }
+
+    // // Filter can be rendered on an object without a bbox,
+    // // as long as filter uses `userSpaceOnUse`.
+    if let Some(ref id) = g.filter {
+        println!("g.filter(id {})", id);
+    //     if let Some(filter_node) = node.tree().defs_by_id(id) {
+    //         if let usvg::NodeKind::Filter(ref filter) = *filter_node.borrow() {
+    //             let ts = usvg::Transform::from_native(curr_ts);
+    //             let background = prepare_filter_background(node, filter, &sub_pixmap);
+    //             let fill_paint = prepare_filter_fill_paint(node, filter, bbox, ts, &sub_pixmap);
+    //             let stroke_paint = prepare_filter_stroke_paint(node, filter, bbox, ts, &sub_pixmap);
+    //             crate::filter::apply(filter, bbox, &ts, &node.tree(),
+    //                                  background.as_ref(), fill_paint.as_ref(), stroke_paint.as_ref(),
+    //                                  &mut sub_pixmap);
+    //         }
+    //     }
+    }
+
+    // // Clipping and masking can be done only for objects with a valid bbox.
+    // if let Some(bbox) = bbox {
+        if let Some(ref id) = g.clip_path {
+            println!("g.clip_path(id {})", id);
+            // if let Some(clip_node) = node.tree().defs_by_id(id) {
+            //     if let usvg::NodeKind::ClipPath(ref cp) = *clip_node.borrow() {
+            //         let mut sub_canvas = Canvas::from(sub_pixmap.as_mut());
+            //         sub_canvas.translate(-tx as f32, -ty as f32);
+            //         sub_canvas.apply_transform(curr_ts);
+            //         crate::clip::clip(&clip_node, cp, bbox, &mut sub_canvas);
+            //     }
+            // }
+        }
+
+        if let Some(ref id) = g.mask {
+            println!("g.mask(id {})", id);
+    //         if let Some(mask_node) = node.tree().defs_by_id(id) {
+    //             if let usvg::NodeKind::Mask(ref mask) = *mask_node.borrow() {
+    //                 let mut sub_canvas = Canvas::from(sub_pixmap.as_mut());
+    //                 sub_canvas.translate(-tx as f32, -ty as f32);
+    //                 sub_canvas.apply_transform(curr_ts);
+    //                 crate::mask::mask(&mask_node, mask, bbox, &mut sub_canvas);
+    //             }
+    //         }
+        }
+    // }
+
+    // let mut paint = tiny_skia::PixmapPaint::default();
+    // paint.quality = tiny_skia::FilterQuality::Nearest;
+    // if !g.opacity.is_default() {
+        // paint.opacity = g.opacity.value() as f32;
+    // }
+
+    // canvas.pixmap.draw_pixmap(tx, ty, sub_pixmap.as_ref(), &paint,
+                            //   tiny_skia::Transform::identity(), None);
+
 }
 
 #[derive(Debug)]
