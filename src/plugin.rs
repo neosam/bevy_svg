@@ -17,7 +17,7 @@ use crate::{
     vertex_buffer::{VertexBuffers, VertexConstructor, apply_transform, merge_buffers}
 };
 use bevy::{
-    app::{AppBuilder, Plugin}, asset::{Assets, Handle},
+    app::{App, Plugin}, asset::{Assets, Handle},
     asset::{AddAsset, HandleUntyped},
     ecs::{
         query::Added,
@@ -49,7 +49,7 @@ pub enum Stage {
 pub struct SvgPlugin;
 
 impl Plugin for SvgPlugin {
-    fn build(&self, app: &mut AppBuilder) {
+    fn build(&self, app: &mut App) {
         let fill_tess = FillTessellator::new();
         let stroke_tess = StrokeTessellator::new();
         app.add_asset::<SvgMaterial>()
