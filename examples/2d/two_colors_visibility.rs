@@ -15,8 +15,8 @@ fn main() {
         })
         .add_plugins(DefaultPlugins)
         .add_plugin(bevy_svg::prelude::SvgPlugin)
-        .add_startup_system(setup.system())
-        .add_system(keyboard_input_system.system())
+        .add_startup_system(setup)
+        .add_system(keyboard_input_system)
         .run();
 }
 

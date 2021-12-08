@@ -18,7 +18,7 @@ use bevy::{
     ecs::{
         query::Added,
         schedule::{StageLabel, SystemStage},
-        system::{IntoSystem, Query, ResMut}
+        system::{Query, ResMut}
     },
     reflect::TypeUuid,
     render::{
@@ -48,13 +48,13 @@ impl Plugin for SvgPlugin {
         app
             .insert_resource(fill_tess)
             .insert_resource(stroke_tess)
-            .add_startup_system(setup.system())
+            .add_startup_system(setup)
             .add_stage_after(
                 bevy::app::CoreStage::Update,
                 Stage::SVG,
                 SystemStage::parallel(),
             )
-            .add_system_to_stage(Stage::SVG, svg_mesh_maker.system());
+            .add_system_to_stage(Stage::SVG, svg_mesh_maker);
     }
 }
 
