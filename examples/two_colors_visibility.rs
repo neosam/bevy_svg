@@ -5,7 +5,7 @@ use bevy::{
 use bevy_svg::prelude::*;
 
 fn main() {
-    App::build()
+    App::new()
         .insert_resource(Msaa { samples: 4 })
         .insert_resource(WindowDescriptor {
             title: "two_colors_visibility".to_string(),

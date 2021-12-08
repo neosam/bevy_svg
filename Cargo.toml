@@ -14,8 +14,7 @@ exclude = ["assets", "examples"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-#bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = ["render", "trace"] }
-bevy = { git = "https://github.com/bevyengine/bevy", rev = "65e834ce8d5142f1a01d06c2a9e4e7ef4a1238a9", default-features = false, features = ["render", "trace"] }
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = ["render", "trace"] }
 
 lyon_geom = "0.17"
 lyon_svg = "0.17"
@@ -23,5 +22,4 @@ lyon_tessellation = "0.17"
 usvg = "0.19"
 
 [dev-dependencies]
-#bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = true }
-bevy = { git = "https://github.com/bevyengine/bevy", rev = "65e834ce8d5142f1a01d06c2a9e4e7ef4a1238a9", default-features = true }
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = true }
